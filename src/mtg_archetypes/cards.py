@@ -102,6 +102,17 @@ def slugify_archetype(name: str) -> str:
     return s
 
 
+# Some deck formats include explicit "Sideboard" or "Mainboard" headers,
+# while others rely on blank lines or "SB:" prefixes.
+# This regex helps identify those headers.
+# The default MTGO format when downloading a deck has neither and separates the MB/SB
+# with 2 blank lines, so we also check for that case although not with this regex.
+_SIDEBOARD_HEADER_RE = re.compile(r"^(?://|#)?\s*sideboard(?:\s*\(\d+\))?:?$", re.IGNORECASE)
+_MAINBOARD_HEADER_RE = re.compile(
+    r"^(?://|#)?\s*(?:mainboard|deck)(?:\s*\(\d+\))?:?$", re.IGNORECASE
+)
+
+
 def parse_decklist_text(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Parse standard MTG decklist text into mainboard and sideboard card dicts.
@@ -113,23 +124,31 @@ def parse_decklist_text(text: str) -> tuple[list[dict[str, Any]], list[dict[str,
     sideboard: list[dict[str, Any]] = []
     in_sideboard = False
 
+    has_explicit_sideboard = any(
+        bool(_SIDEBOARD_HEADER_RE.match(line.strip())) or line.strip().lower().startswith("sb:")
+        for line in text.splitlines()
+    )
+
     for line in text.splitlines():
         line = line.strip()
         if not line:
+            # Blank line may indicate transition to sideboard if no explicit header is present
+            # AND there are already cards in the mainboard
+            if not has_explicit_sideboard and mainboard:
+                in_sideboard = True
             continue
 
         # Check section header
-        lower = line.lower()
-        if lower in {"sideboard", "sideboard:", "// sideboard", "//sideboard", "# sideboard"}:
+        if _SIDEBOARD_HEADER_RE.match(line):
             in_sideboard = True
             continue
-        if lower in {"mainboard", "mainboard:", "// mainboard", "deck", "// deck"}:
+        if _MAINBOARD_HEADER_RE.match(line):
             in_sideboard = False
             continue
 
-        # Check SB: prefix (common in some export formats)
+        # Check 'SB:' prefix (common in some export formats)
         is_sb_line = in_sideboard
-        if line.startswith("SB:") or line.startswith("sb:"):
+        if line.lower().startswith("sb:"):
             is_sb_line = True
             line = line[3:].strip()
 
